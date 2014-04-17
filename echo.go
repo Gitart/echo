@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -25,7 +26,7 @@ func main() {
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
-		fmt.Printf("ERROR: invalid addr [%s] , err %s\n", tcpAddr, err)
+		log.Fatalf("ERROR: invalid addr [%s] , err %s\n", tcpAddr, err)
 		return
 	}
 
@@ -37,54 +38,73 @@ func main() {
 	}()
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go start(addr)
-
+	s := NewEchoServer(addr)
+	go s.Start()
 	<-exitChan
+	s.Stop()
 }
 
-func start(addr string) {
-	ln, err := net.Listen("tcp", addr)
+type EchoServer struct {
+	bindAddr    string
+	tcpListener net.Listener
+}
+
+func NewEchoServer(bindAddr string) *EchoServer {
+	return &EchoServer{bindAddr: bindAddr}
+}
+
+func (s *EchoServer) Start() {
+	tcpListener, err := net.Listen("tcp", s.bindAddr)
 	if err != nil {
-		fmt.Printf("ERROR: listen on port [:%s] error %s\n", port, err)
+		log.Fatalf("ERROR: listen on [%s] error %s\n", s.bindAddr, err)
 	}
-	defer func() { ln.Close() }()
+	s.tcpListener = tcpListener
 
 	fmt.Printf("INFO: start listenn on port %d\n", *port)
 	for {
-		conn, err := ln.Accept()
+		conn, err := tcpListener.Accept()
 		if err != nil {
 			// handle error
 			fmt.Printf("ERROR: accept [%s] err %s\n", conn.RemoteAddr().String(), err)
 			continue
 		}
-		go handleConnection(conn)
+		go s.handleConnection(conn)
 	}
 }
 
-func handleConnection(conn net.Conn) {
-	fmt.Printf("INFO: handle conn %s\n", conn.RemoteAddr().String())
+func (s *EchoServer) Stop() {
+	if s.tcpListener != nil {
+		s.tcpListener.Close()
+	}
+	fmt.Printf("INFO: echo server stop\n")
+}
+
+func (s *EchoServer) handleConnection(conn net.Conn) {
+	client := conn.RemoteAddr().String()
+	fmt.Printf("INFO: handle conn %s\n", client)
 
 	r := bufio.NewReader(conn)
 	defer func() {
 		if conn != nil {
 			conn.Close()
 		}
+		fmt.Printf("INFO: close conn [%s]\n", client)
 	}()
 
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				fmt.Printf("INFO: [%s] client close connection.\n", conn.RemoteAddr().String())
+				fmt.Printf("INFO: [%s] client close connection.\n", client)
 			} else {
-				fmt.Printf("ERROR: [%s] conn err %s.\n", conn.RemoteAddr().String(), err)
+				fmt.Printf("ERROR: [%s] conn err %s.\n", client, err)
 			}
 			break
 		}
-		fmt.Printf("INFO: [%s]<data> %s", conn.RemoteAddr().String(), line)
+		fmt.Printf("INFO: [%s]<data> %s", client, line)
 		_, err = conn.Write([]byte(line))
 		if err != nil {
-			fmt.Printf("ERROR: [%s] conn write err %s.\n", conn.RemoteAddr().String(), err)
+			fmt.Printf("ERROR: [%s] conn write err %s.\n", client, err)
 			break
 		}
 	}
